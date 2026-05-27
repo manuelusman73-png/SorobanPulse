@@ -72,6 +72,11 @@ pub fn record_xdr_invalid() {
     m::counter!("soroban_pulse_events_xdr_invalid_total").increment(1);
 }
 
+/// Record an invalid contract ID (issue #370)
+pub fn record_invalid_contract_id() {
+    m::counter!("soroban_pulse_events_invalid_contract_id_total").increment(1);
+}
+
 /// Record a bloom filter hit (pre-filtered duplicate) (issue #266)
 pub fn record_bloom_filter_hit() {
     m::counter!("soroban_pulse_bloom_filter_hits_total").increment(1);
