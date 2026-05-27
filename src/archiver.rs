@@ -1,5 +1,6 @@
 //! Background archival job: moves events older than `archive_after_days` from
 //! PostgreSQL to S3-compatible object storage as gzip-compressed NDJSON files.
+//! Issue #371: Verifies upload integrity via SHA-256 checksum before marking archived.
 //!
 //! Only compiled when the `archive` feature is enabled.
 
@@ -7,6 +8,7 @@ use aws_sdk_s3::primitives::ByteStream;
 use chrono::{NaiveDate, Utc};
 use flate2::{write::GzEncoder, Compression};
 use serde::{Deserialize, Serialize};
+use sha2::{Sha256, Digest};
 use sqlx::PgPool;
 use std::io::Write;
 use tracing::{error, info, warn};
@@ -102,6 +104,11 @@ async fn archive_date(
     let count = rows.len();
     let gz_bytes = encode_ndjson_gz(&rows)?;
 
+    // Compute SHA-256 of the archive before upload
+    let mut hasher = Sha256::new();
+    hasher.update(&gz_bytes);
+    let local_hash = format!("{:x}", hasher.finalize());
+
     let key = format!(
         "{}/{}/{}/{}/events.ndjson.gz",
         prefix,
@@ -110,7 +117,7 @@ async fn archive_date(
         date.format("%d"),
     );
 
-    s3.put_object()
+    let put_response = s3.put_object()
         .bucket(bucket)
         .key(&key)
         .body(ByteStream::from(gz_bytes))
@@ -119,7 +126,21 @@ async fn archive_date(
         .send()
         .await?;
 
-    // Delete only after a successful upload.
+    // Verify integrity: compare ETag with local SHA-256
+    let etag = put_response.e_tag().unwrap_or("").trim_matches('"');
+    if etag != local_hash {
+        error!(
+            date = %date,
+            key = %key,
+            local_hash = %local_hash,
+            remote_etag = %etag,
+            "Archive integrity check failed: ETag mismatch"
+        );
+        crate::metrics::record_archive_integrity_failure();
+        return Err(anyhow::anyhow!("Archive integrity check failed: ETag mismatch"));
+    }
+
+    // Delete only after a successful verified upload.
     sqlx::query("DELETE FROM events WHERE timestamp BETWEEN $1 AND $2")
         .bind(day_start)
         .bind(day_end)

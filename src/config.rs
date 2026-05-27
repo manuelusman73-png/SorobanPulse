@@ -174,6 +174,7 @@ pub struct Config {
     pub indexer_error_backoff_ms: u64,
     pub sse_keepalive_interval_ms: u64,
     pub sse_max_connections: usize,
+    pub sse_drain_timeout_secs: u64,
     pub environment: Environment,
     pub max_body_size_bytes: usize,
     pub log_sample_rate: u32,
@@ -273,6 +274,7 @@ impl Default for Config {
             indexer_error_backoff_ms: 10000,
             sse_keepalive_interval_ms: 15000,
             sse_max_connections: 1000,
+            sse_drain_timeout_secs: 5,
             environment: Environment::Development,
             max_body_size_bytes: 1024 * 1024, // 1 MB default
             log_sample_rate: 1,
@@ -791,6 +793,16 @@ impl Config {
         )
         .unwrap_or(1000);
 
+        let sse_drain_timeout_secs = parse_int_range::<u64>(
+            "SSE_DRAIN_TIMEOUT_SECS",
+            &env_or_file_or("SSE_DRAIN_TIMEOUT_SECS", &file, "5"),
+            1,
+            60,
+            "5",
+            &mut errors,
+        )
+        .unwrap_or(5);
+
         let max_body_size_bytes = parse_int::<usize>(
             "MAX_BODY_SIZE_BYTES",
             &env_or_file_or("MAX_BODY_SIZE_BYTES", &file, "1048576"),
@@ -921,6 +933,7 @@ impl Config {
             indexer_error_backoff_ms,
             sse_keepalive_interval_ms,
             sse_max_connections,
+            sse_drain_timeout_secs,
             environment,
             max_body_size_bytes,
             log_sample_rate,

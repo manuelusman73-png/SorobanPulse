@@ -73,6 +73,8 @@ pub struct PaginationParams {
     pub exact_count: Option<bool>,
     pub fields: Option<String>,
     pub contract_id: Option<String>,
+    /// Comma-separated list of contract IDs to filter by (max 20).
+    pub contract_ids: Option<String>,
     pub event_type: Option<EventType>,
     pub from_ledger: Option<i64>,
     pub to_ledger: Option<i64>,
@@ -253,6 +255,7 @@ impl PaginationParams {
         "schema_version",
         "anonymized",
     ];
+    pub const MAX_CONTRACT_IDS_FILTER: usize = 20;
 
     pub fn columns(&self) -> Result<Vec<&str>, (Vec<String>, Vec<&'static str>)> {
         match &self.fields {

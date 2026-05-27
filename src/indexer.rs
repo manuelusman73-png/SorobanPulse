@@ -108,7 +108,7 @@ impl RpcClient for SorobanRpcClient {
             }
             None => {
                 if let Some(err) = resp.error {
-                    warn!(code = err.code, message = %err.message, "RPC error");
+                    warn!(code = err.code, error = %err.message, "RPC error");
                     metrics::record_rpc_error();
                 }
                 Err("RPC returned no result".to_string())
@@ -172,7 +172,7 @@ impl RpcClient for SorobanRpcClient {
             Some(r) => Ok(r),
             None => {
                 if let Some(err) = resp.error {
-                    warn!(code = err.code, message = %err.message, "RPC error");
+                    warn!(code = err.code, error = %err.message, "RPC error");
                     metrics::record_rpc_error();
                     Err(err.message)
                 } else {
@@ -637,7 +637,7 @@ impl<R: RpcClient> Indexer<R> {
             {
                 Ok(r) => r,
                 Err(msg) => {
-                    warn!(message = %msg, "RPC error");
+                    warn!(error = %msg, "RPC error");
                     metrics::record_rpc_error();
                     return Err(IndexerFetchError::Rpc(msg));
                 }

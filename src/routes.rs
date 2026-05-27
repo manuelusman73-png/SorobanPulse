@@ -73,6 +73,8 @@ pub struct AppState {
     ),
     paths(
         handlers::health,
+        handlers::health_live,
+        handlers::health_ready,
         handlers::status,
         handlers::get_events,
         handlers::get_event_stats,
@@ -89,6 +91,7 @@ pub struct AppState {
         handlers::ws_events,
         handlers::get_contracts,
         handlers::replay_events,
+        handlers::start_reencrypt,
         handlers::register_contract_abi,
         handlers::anonymize_event,
         handlers::pause_indexer,
@@ -286,6 +289,7 @@ pub fn create_router_with_tx_and_tenant_map(
         )
         .route("/contracts", get(handlers::get_contracts))
         .route("/admin/replay", axum::routing::post(handlers::replay_events))
+        .route("/admin/reencrypt", axum::routing::post(handlers::start_reencrypt))
         .route("/admin/contracts/{contract_id}/abi", axum::routing::post(handlers::register_contract_abi))
         .route("/admin/events/{id}/anonymize", axum::routing::post(handlers::anonymize_event))
         .route("/admin/indexer/pause", axum::routing::post(handlers::pause_indexer))

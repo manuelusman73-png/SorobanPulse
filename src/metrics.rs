@@ -72,6 +72,26 @@ pub fn record_xdr_invalid() {
     m::counter!("soroban_pulse_events_xdr_invalid_total").increment(1);
 }
 
+/// Record an invalid contract ID (issue #370)
+pub fn record_invalid_contract_id() {
+    m::counter!("soroban_pulse_events_invalid_contract_id_total").increment(1);
+}
+
+/// Record an archive integrity failure (issue #371)
+pub fn record_archive_integrity_failure() {
+    m::counter!("soroban_pulse_archive_integrity_failures_total").increment(1);
+}
+
+/// Update re-encryption progress gauge (issue #372)
+pub fn update_reencrypt_progress(remaining: u64) {
+    m::gauge!("soroban_pulse_reencrypt_progress").set(remaining as f64);
+}
+
+/// Record a re-encryption error (issue #372)
+pub fn record_reencrypt_error() {
+    m::counter!("soroban_pulse_reencrypt_errors_total").increment(1);
+}
+
 /// Record a bloom filter hit (pre-filtered duplicate) (issue #266)
 pub fn record_bloom_filter_hit() {
     m::counter!("soroban_pulse_bloom_filter_hits_total").increment(1);
