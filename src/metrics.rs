@@ -77,6 +77,16 @@ pub fn record_bloom_filter_hit() {
     m::counter!("soroban_pulse_bloom_filter_hits_total").increment(1);
 }
 
+/// Update the bloom filter size gauge (number of set bits) (issue #369)
+pub fn update_bloom_filter_size(size: u64) {
+    m::gauge!("soroban_pulse_bloom_filter_size").set(size as f64);
+}
+
+/// Record a normalizer error (issue #368)
+pub fn record_normalizer_error() {
+    m::counter!("soroban_pulse_normalizer_errors_total").increment(1);
+}
+
 /// Record a Kinesis publish failure (issue #265)
 pub fn record_kinesis_publish_failure() {
     m::counter!("soroban_pulse_kinesis_publish_failures_total").increment(1);

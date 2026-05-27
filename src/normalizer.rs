@@ -146,11 +146,18 @@ fn pointer_set(root: &mut Value, pointer: &str, new_val: Value) {
 }
 
 /// Run the normalization pipeline for a given contract and event_data.
-/// Returns `None` if there are no rules for this contract.
+/// Returns `None` if there are no rules for this contract or if event_data is null/empty.
 pub fn normalize(rules: &[NormalizationRule], event_data: &Value) -> Option<Value> {
     if rules.is_empty() {
         return None;
     }
+    
+    // Handle null or empty event_data
+    if event_data.is_null() || (event_data.is_object() && event_data.as_object().map_or(false, |o| o.is_empty())) {
+        tracing::warn!("event_data is null or empty, skipping normalization");
+        return None;
+    }
+    
     let mut normalized = event_data.clone();
     for rule in rules {
         let transform: Transform = match rule.transform.parse() {
@@ -298,5 +305,28 @@ mod tests {
         // Should not panic, just skip
         let result = normalize(&rules, &data).unwrap();
         assert_eq!(result, data);
+    }
+
+    #[test]
+    fn normalize_null_event_data_returns_none() {
+        let rules = vec![rule("/value/amount", "divide_by_decimals", json!({"decimals": 2}))];
+        let data = Value::Null;
+        assert!(normalize(&rules, &data).is_none());
+    }
+
+    #[test]
+    fn normalize_empty_object_returns_none() {
+        let rules = vec![rule("/value/amount", "divide_by_decimals", json!({"decimals": 2}))];
+        let data = json!({});
+        assert!(normalize(&rules, &data).is_none());
+    }
+
+    #[test]
+    fn normalize_diagnostic_event_with_missing_keys() {
+        let rules = vec![rule("/value", "hex_to_decimal", json!({}))];
+        let data = json!({"topic": []});
+        // Should not panic, just return the data as-is
+        let result = normalize(&rules, &data);
+        assert!(result.is_some());
     }
 }
