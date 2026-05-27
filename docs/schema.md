@@ -208,3 +208,27 @@ STATS_REFRESH_INTERVAL_SECS=300   # default: 5 minutes
 ```
 
 It issues `REFRESH MATERIALIZED VIEW CONCURRENTLY` for each view in sequence. Failures are logged as errors but do not crash the service — the views simply serve slightly stale data until the next successful refresh.
+
+### Lock Timeout Behaviour
+
+Each materialized view refresh acquires a dedicated pool connection, sets `lock_timeout = '5s'`, and resets it before returning the connection. If a concurrent long-running query holds a conflicting lock, the refresh is skipped (a `WARN` is logged) and retried on the next scheduled interval. This prevents a stuck refresh from blocking the connection pool or cascading into API failures.
+
+Metrics emitted per refresh cycle:
+- `soroban_pulse_matview_refresh_duration_seconds{view}` — histogram of successful refresh latency.
+- `soroban_pulse_matview_refresh_timeout_total{view}` — counter incremented each time a lock timeout causes a skip.
+
+---
+
+## Index Monitoring
+
+The background task in `src/index_monitor.rs` runs on every cycle (`INDEX_CHECK_INTERVAL_HOURS`, default 24 h) and performs two checks:
+
+1. **EXPLAIN-based checks** — runs `EXPLAIN (FORMAT JSON)` on representative queries and warns if the query planner falls back to a sequential scan instead of the expected index.
+
+2. **pg_stat_user_indexes scan counts** — queries `pg_stat_user_indexes` and emits per-index scan counts as Prometheus metrics:
+   - `soroban_pulse_unused_indexes_total` — gauge reporting how many public-schema indexes have `idx_scan = 0` since the last statistics reset.
+   - `soroban_pulse_index_scan_count{table, index}` — gauge reporting `idx_scan` for each monitored index.
+
+A Prometheus alert (`UnusedIndexesDetected`) fires when `soroban_pulse_unused_indexes_total > 0` for more than 24 hours. Unused indexes waste write throughput and storage; the alert prompts operators to review and drop obsolete indexes.
+
+> **Note:** `idx_scan` resets when `pg_stat_reset()` is called or the PostgreSQL instance is restarted. A newly created index will show `idx_scan = 0` until it is first used; allow one full monitoring cycle before treating it as unused.

@@ -32,10 +32,21 @@ env:
   CONTRACT_COUNT_CACHE_SIZE: "1000"
   CONTRACT_COUNT_CACHE_TTL_SECS: "30"
 
-# Sensitive values — set via --set or a separate secrets file; never commit real values.
+# Sensitive values — injected into a Kubernetes Secret.
+# For production, prefer existingSecret (see helm/soroban-pulse/README.md).
+# Never commit real credentials here; pass them via --set or a values override
+# file excluded from version control.
 secrets:
   databaseUrl: "postgres://<USER>:<PASSWORD>@<HOST>:5432/<DATABASE>"
   apiKey: ""
+  smtpPassword: ""
+
+# When set to a non-empty name the chart will NOT create a Secret and will
+# reference this pre-existing Secret instead. The Secret must contain the same
+# keys: DATABASE_URL, API_KEY, SMTP_PASSWORD.
+# Recommended for production when using external-secrets, Vault Agent, or
+# Sealed Secrets.
+existingSecret: ""
 
 ingress:
   enabled: false

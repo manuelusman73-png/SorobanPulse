@@ -26,7 +26,7 @@ spec:
             - configMapRef:
                 name: {{ include "soroban-pulse.fullname" . }}-config
             - secretRef:
-                name: {{ include "soroban-pulse.fullname" . }}-secrets
+                name: {{ .Values.existingSecret | default (printf "%s-secrets" (include "soroban-pulse.fullname" .)) }}
           livenessProbe:
             httpGet:
               path: {{ .Values.livenessProbe.path }}

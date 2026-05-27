@@ -108,3 +108,23 @@ groups:
         annotations:
           summary: "Soroban Pulse HTTP p95 request latency is high"
           description: "p95 request latency is {{ $value | humanizeDuration }}. Consider scaling or investigating database performance."
+
+      - alert: UnusedIndexesDetected
+        expr: soroban_pulse_unused_indexes_total > 0
+        for: 24h
+        labels:
+          severity: warning
+          component: database
+        annotations:
+          summary: "Soroban Pulse has unused database indexes"
+          description: "{{ $value }} index(es) have not been scanned since the last pg_stat_user_indexes reset. Unused indexes waste storage and slow writes. Review with: SELECT indexname, tablename FROM pg_stat_user_indexes WHERE schemaname = 'public' AND idx_scan = 0;"
+
+      - alert: MatviewRefreshTimeout
+        expr: increase(soroban_pulse_matview_refresh_timeout_total[1h]) > 0
+        for: 0m
+        labels:
+          severity: warning
+          component: database
+        annotations:
+          summary: "Materialized view refresh hit lock timeout"
+          description: "A materialized view refresh was skipped due to a lock timeout in the last hour. Check for long-running queries blocking the view lock."

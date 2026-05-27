@@ -230,6 +230,21 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  helm-lint:
+    name: Helm Chart Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: "3.14.0"
+      - name: Lint Helm chart
+        run: helm lint helm/soroban-pulse
+      - name: Render template (default values)
+        run: helm template soroban-pulse helm/soroban-pulse | grep -v "DATABASE_URL\|API_KEY\|SMTP_PASSWORD"
+      - name: Render template (existingSecret)
+        run: helm template soroban-pulse helm/soroban-pulse --set existingSecret=my-secret
+
   openapi:
     name: OpenAPI Spec Validation
     runs-on: ubuntu-latest

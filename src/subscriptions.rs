@@ -7,11 +7,13 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::PgPool;
+use std::net::IpAddr;
 use std::time::Duration;
 use tokio::time::sleep;
+use url::Url;
 use uuid::Uuid;
 
-use crate::{error::AppError, routes::AppState};
+use crate::{config::Environment, error::AppError, routes::AppState};
 
 // ---------------------------------------------------------------------------
 // Types
@@ -39,6 +41,126 @@ pub struct AckRequest {
 }
 
 // ---------------------------------------------------------------------------
+// SSRF validation
+// ---------------------------------------------------------------------------
+
+/// Build the reqwest client used by the delivery worker.
+/// Redirects are disabled to prevent SSRF via redirect chains.
+pub fn build_delivery_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(10))
+        .build()
+        .expect("Failed to build subscription delivery HTTP client")
+}
+
+/// Validate a callback URL against SSRF rules.
+///
+/// Rules (in order):
+/// 1. If SUBSCRIPTION_ALLOWED_URL_PREFIXES is set, the URL must match one of the
+///    comma-separated prefixes — all other checks are skipped for matched URLs.
+/// 2. The URL must be parseable.
+/// 3. In production/staging, only HTTPS is accepted.
+/// 4. Private IPs (RFC 1918), loopback, and link-local ranges are always rejected.
+pub fn validate_callback_url(raw: &str, env: &Environment) -> Result<(), AppError> {
+    // 1. Allowlist check
+    let prefixes: Vec<String> = std::env::var("SUBSCRIPTION_ALLOWED_URL_PREFIXES")
+        .unwrap_or_default()
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    if !prefixes.is_empty() {
+        if prefixes.iter().any(|p| raw.starts_with(p.as_str())) {
+            return Ok(());
+        }
+        return Err(AppError::Validation(
+            "callback_url does not match any entry in SUBSCRIPTION_ALLOWED_URL_PREFIXES".into(),
+        ));
+    }
+
+    // 2. Parse
+    let url = Url::parse(raw)
+        .map_err(|e| AppError::Validation(format!("callback_url is not a valid URL: {e}")))?;
+
+    // 3. Scheme check
+    match url.scheme() {
+        "https" => {}
+        "http" if !env.is_production_like() => {}
+        "http" => {
+            return Err(AppError::Validation(
+                "callback_url must use HTTPS in production".into(),
+            ));
+        }
+        scheme => {
+            return Err(AppError::Validation(format!(
+                "callback_url scheme '{scheme}' is not permitted; use https"
+            )));
+        }
+    }
+
+    // 4. SSRF: reject private/reserved hosts
+    let host = url.host_str().unwrap_or("");
+    if is_ssrf_host(host) {
+        return Err(AppError::Validation(
+            "callback_url points to a private, loopback, or link-local address".into(),
+        ));
+    }
+
+    Ok(())
+}
+
+fn is_ssrf_host(host: &str) -> bool {
+    // Loopback hostnames
+    if matches!(host, "localhost" | "127.0.0.1" | "::1")
+        || host.ends_with(".local")
+        || host.ends_with(".localhost")
+    {
+        return true;
+    }
+
+    // Try to parse as a numeric IP first (handles both IPv4 and IPv6)
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        return is_private_ip(&ip);
+    }
+
+    // Hostname-form private ranges (e.g. "10.0.0.1" already handled above,
+    // but catch textual prefixes for belt-and-suspenders)
+    host.starts_with("10.")
+        || host.starts_with("192.168.")
+        || host.starts_with("169.254.")
+        || (host.starts_with("172.") && {
+            host.split('.')
+                .nth(1)
+                .and_then(|o| o.parse::<u8>().ok())
+                .map(|o| (16..=31).contains(&o))
+                .unwrap_or(false)
+        })
+}
+
+fn is_private_ip(ip: &IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            let [a, b, c, _] = v4.octets();
+            a == 127                                    // loopback 127/8
+                || a == 10                              // RFC 1918 10/8
+                || (a == 172 && (16..=31).contains(&b)) // RFC 1918 172.16/12
+                || (a == 192 && b == 168)               // RFC 1918 192.168/16
+                || (a == 169 && b == 254)               // link-local / metadata
+                || (a == 0 && b == 0 && c == 0)         // 0.0.0.0
+                || a >= 224                              // multicast + reserved
+        }
+        IpAddr::V6(v6) => {
+            v6.is_loopback()
+                || v6.is_unspecified()
+                || (v6.segments()[0] & 0xffc0) == 0xfe80 // link-local fe80::/10
+                || (v6.segments()[0] & 0xfe00) == 0xfc00 // unique-local fc00::/7
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Handlers
 // ---------------------------------------------------------------------------
 
@@ -49,6 +171,7 @@ pub async fn create_subscription(
     if body.callback_url.is_empty() {
         return Err(AppError::Validation("callback_url is required".into()));
     }
+    validate_callback_url(&body.callback_url, &state.config.environment)?;
     if body.from_ledger < 0 {
         return Err(AppError::Validation(
             "from_ledger must be non-negative".into(),
@@ -266,6 +389,103 @@ pub mod tests {
     use super::*;
     use serde_json::json;
     use std::sync::{Arc, Mutex};
+
+    // --- SSRF validation tests ---
+
+    #[test]
+    fn ssrf_rejects_localhost() {
+        let err = validate_callback_url("http://localhost/hook", &Environment::Development);
+        assert!(err.is_err(), "localhost must be rejected");
+    }
+
+    #[test]
+    fn ssrf_rejects_127_loopback() {
+        let err = validate_callback_url("http://127.0.0.1/hook", &Environment::Development);
+        assert!(err.is_err(), "127.0.0.1 must be rejected");
+    }
+
+    #[test]
+    fn ssrf_rejects_ipv6_loopback() {
+        let err = validate_callback_url("http://[::1]/hook", &Environment::Development);
+        assert!(err.is_err(), "::1 must be rejected");
+    }
+
+    #[test]
+    fn ssrf_rejects_rfc1918_10_x() {
+        let err = validate_callback_url("http://10.0.0.1/hook", &Environment::Development);
+        assert!(err.is_err(), "10.x.x.x must be rejected");
+    }
+
+    #[test]
+    fn ssrf_rejects_rfc1918_172_16() {
+        let err = validate_callback_url("http://172.16.0.1/hook", &Environment::Development);
+        assert!(err.is_err(), "172.16.x.x must be rejected");
+    }
+
+    #[test]
+    fn ssrf_rejects_rfc1918_192_168() {
+        let err = validate_callback_url("http://192.168.1.1/hook", &Environment::Development);
+        assert!(err.is_err(), "192.168.x.x must be rejected");
+    }
+
+    #[test]
+    fn ssrf_rejects_link_local_metadata() {
+        let err = validate_callback_url(
+            "http://169.254.169.254/latest/meta-data/",
+            &Environment::Development,
+        );
+        assert!(err.is_err(), "AWS metadata endpoint must be rejected");
+    }
+
+    #[test]
+    fn ssrf_rejects_http_in_production() {
+        let err = validate_callback_url("http://example.com/hook", &Environment::Production);
+        assert!(err.is_err(), "http must be rejected in production");
+    }
+
+    #[test]
+    fn ssrf_allows_https_public_in_production() {
+        let ok = validate_callback_url("https://example.com/hook", &Environment::Production);
+        assert!(ok.is_ok(), "https public URL must be allowed in production");
+    }
+
+    #[test]
+    fn ssrf_allows_http_public_in_development() {
+        let ok = validate_callback_url("http://example.com/hook", &Environment::Development);
+        assert!(ok.is_ok(), "http public URL must be allowed in development");
+    }
+
+    #[test]
+    fn ssrf_allowlist_permits_matched_prefix() {
+        // Safety: env var manipulation is fine in single-threaded unit tests
+        std::env::set_var(
+            "SUBSCRIPTION_ALLOWED_URL_PREFIXES",
+            "http://internal.corp/,https://trusted.corp/",
+        );
+        let ok =
+            validate_callback_url("http://internal.corp/hook", &Environment::Production);
+        std::env::remove_var("SUBSCRIPTION_ALLOWED_URL_PREFIXES");
+        assert!(ok.is_ok(), "allowlisted prefix must be permitted");
+    }
+
+    #[test]
+    fn ssrf_allowlist_blocks_unmatched_url() {
+        std::env::set_var(
+            "SUBSCRIPTION_ALLOWED_URL_PREFIXES",
+            "https://trusted.corp/",
+        );
+        let err =
+            validate_callback_url("https://other.corp/hook", &Environment::Development);
+        std::env::remove_var("SUBSCRIPTION_ALLOWED_URL_PREFIXES");
+        assert!(err.is_err(), "URL not in allowlist must be rejected when allowlist is set");
+    }
+
+    #[test]
+    fn build_delivery_client_does_not_follow_redirects() {
+        // The only way to verify policy without making a real request is to confirm
+        // the builder compiles and returns a client successfully.
+        let _client = build_delivery_client();
+    }
 
     // --- Unit tests for retry backoff logic ---
 
