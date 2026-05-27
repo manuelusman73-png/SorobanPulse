@@ -7,6 +7,7 @@ use axum::{
 };
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
+use subtle::ConstantTimeEq;
 
 /// Middleware to extract request_id from headers and store in thread-local
 pub async fn request_id_middleware(req: Request, next: Next) -> Response {
@@ -65,7 +66,16 @@ pub async fn auth_middleware(
 
         let provided_key = auth_header.or(api_key_header);
 
-        if !provided_key.map_or(false, |key| state.api_keys.contains(&key.to_string())) {
+        // Use constant-time comparison to prevent timing attacks
+        let is_valid = provided_key.map_or(false, |key| {
+            state.api_keys.iter().any(|expected| {
+                let provided_bytes = key.as_bytes();
+                let expected_bytes = expected.as_bytes();
+                provided_bytes.ct_eq(expected_bytes).into()
+            })
+        });
+
+        if !is_valid {
             return Err((
                 StatusCode::UNAUTHORIZED,
                 Json(serde_json::json!({ "error": "unauthorized" })),
@@ -307,6 +317,24 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_auth_failure_with_correct_prefix_wrong_suffix() {
+        let app = setup_app(vec!["secret123".to_string()]).await;
+
+        let response: Response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/test")
+                    .header("Authorization", "Bearer secret999")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]
