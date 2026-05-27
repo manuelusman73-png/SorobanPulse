@@ -238,6 +238,9 @@ pub struct Config {
     pub redis_stream_key: Option<String>,
     // Stats refresh
     pub stats_refresh_interval_secs: u64,
+    // Issue #327: Event retention and pruning
+    pub retention_days: u64,
+    pub pruning_interval_hours: u64,
 }
 
 impl Default for Config {
@@ -305,6 +308,8 @@ impl Default for Config {
             redis_url: None,
             redis_stream_key: None,
             stats_refresh_interval_secs: 3600,
+            retention_days: 90,
+            pruning_interval_hours: 24,
         }
     }
 }
@@ -975,6 +980,12 @@ impl Config {
             stats_refresh_interval_secs: env_or_file("STATS_REFRESH_INTERVAL_SECS", &file)
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(3600),
+            retention_days: env_or_file("RETENTION_DAYS", &file)
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(90),
+            pruning_interval_hours: env_or_file("PRUNING_INTERVAL_HOURS", &file)
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(24),
         }
     }
 }

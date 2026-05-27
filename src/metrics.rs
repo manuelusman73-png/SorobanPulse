@@ -106,6 +106,11 @@ pub fn record_replay_job() {
     m::counter!("soroban_pulse_replay_jobs_total").increment(1);
 }
 
+/// Record events pruned
+pub fn increment_events_pruned(count: u64) {
+    m::counter!("soroban_pulse_events_pruned_total").increment(count);
+}
+
 /// Record HTTP request duration
 pub fn record_http_request_duration(
     duration: std::time::Duration,

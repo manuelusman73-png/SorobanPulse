@@ -26,6 +26,7 @@ mod normalizer;
 #[cfg(feature = "parquet")]
 mod parquet_export;
 
+mod pruner;
 mod pubsub;
 mod queue_publisher;
 mod routes;
@@ -372,6 +373,14 @@ async fn main() -> anyhow::Result<()> {
     stats_refresh::spawn(
         pool.clone(),
         config.stats_refresh_interval_secs,
+        shutdown_rx.clone(),
+    );
+
+    // Spawn event pruning background task
+    pruner::start_pruning_task(
+        pool.clone(),
+        config.retention_days,
+        config.pruning_interval_hours,
         shutdown_rx.clone(),
     );
 
