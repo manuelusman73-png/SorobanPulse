@@ -616,6 +616,22 @@ pub async fn stream_events_multi(
 
     let ids: Vec<String> = raw.split(',').map(|s| s.trim().to_string()).collect();
 
+    // Validate number of contract IDs does not exceed limit
+    if ids.len() > state.config.sse_multi_max_contract_ids {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": format!("too many contract IDs (max {})", state.config.sse_multi_max_contract_ids),
+                "code": "VALIDATION_ERROR",
+                "limit": state.config.sse_multi_max_contract_ids,
+                "provided": ids.len(),
+            })),
+        ));
+    }
+
+    // Record histogram metric for contract IDs per connection
+    crate::metrics::record_sse_multi_contract_ids(ids.len() as u64);
+
     // Validate every ID; collect all invalid ones for a helpful error message.
     let invalid: Vec<String> = ids
         .iter()
