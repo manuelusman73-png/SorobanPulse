@@ -176,6 +176,8 @@ pub struct Config {
     pub sse_keepalive_interval_ms: u64,
     pub sse_max_connections: usize,
     pub sse_drain_timeout_secs: u64,
+    /// Maximum number of contract IDs per SSE multi-stream connection (default 100).
+    pub sse_multi_max_contract_ids: usize,
     pub environment: Environment,
     pub max_body_size_bytes: usize,
     pub log_sample_rate: u32,
@@ -810,6 +812,16 @@ impl Config {
         )
         .unwrap_or(5);
 
+        let sse_multi_max_contract_ids = parse_int_range::<usize>(
+            "SSE_MULTI_MAX_CONTRACT_IDS",
+            &env_or_file_or("SSE_MULTI_MAX_CONTRACT_IDS", &file, "100"),
+            1,
+            usize::MAX,
+            "100",
+            &mut errors,
+        )
+        .unwrap_or(5);
+
         let max_body_size_bytes = parse_int::<usize>(
             "MAX_BODY_SIZE_BYTES",
             &env_or_file_or("MAX_BODY_SIZE_BYTES", &file, "1048576"),
@@ -941,6 +953,7 @@ impl Config {
             sse_keepalive_interval_ms,
             sse_max_connections,
             sse_drain_timeout_secs,
+            sse_multi_max_contract_ids,
             environment,
             max_body_size_bytes,
             log_sample_rate,
@@ -1016,9 +1029,13 @@ impl Config {
             sse_replay_limit: env_or_file("SSE_REPLAY_LIMIT", &file)
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(500),
-            indexer_ignore_checkpoint: env_or_file("INDEXER_IGNORE_CHECKPOINT", &file)
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(false),
+            max_ledger_range: parse_int::<u64>(
+                "MAX_LEDGER_RANGE",
+                &env_or_file_or("MAX_LEDGER_RANGE", &file, "100000"),
+                "100000",
+                &mut errors,
+            )
+            .unwrap_or(100_000),
         }
     }
 }

@@ -21,6 +21,7 @@ import {
     EventTypeFromJSON,
     EventTypeToJSON,
 } from '../models/index';
+import { SSEStream, SSEStreamOptions } from '../sse';
 
 export interface GetContractsRequest {
     page?: number | null;
@@ -347,4 +348,98 @@ export class EventsApi extends runtime.BaseAPI {
         await this.streamEventsByContractRaw(requestParameters, initOverrides);
     }
 
-}
+    /**
+     * Stream new events in real time via Server-Sent Events with automatic reconnection.
+     * Returns an SSEStream instance that manages the connection lifecycle.
+     * 
+     * @param options - SSE stream options including callbacks and authentication
+     * @returns SSEStream instance
+     * 
+     * @example
+     * ```typescript
+     * const stream = eventsApi.streamEventsSSE({
+     *   apiKey: 'your-api-key',
+     *   onMessage: (event) => {
+     *     const data = JSON.parse(event.data);
+     *     console.log('New event:', data);
+     *   },
+     *   onPing: (timestamp) => console.log('Ping:', timestamp),
+     *   onClose: () => console.log('Stream closed'),
+     *   onError: (error) => console.error('Stream error:', error),
+     * });
+     * 
+     * stream.connect();
+     * 
+     * // Later, disconnect
+     * stream.disconnect();
+     * ```
+     */
+    streamEventsSSE(options?: SSEStreamOptions): SSEStream {
+        const url = `${this.basePath}/v1/events/stream`;
+        return new SSEStream(url, options);
+    }
+
+    /**
+     * Stream new events for a specific contract in real time via Server-Sent Events with automatic reconnection.
+     * Returns an SSEStream instance that manages the connection lifecycle.
+     * 
+     * @param contractId - The contract ID to stream events for
+     * @param options - SSE stream options including callbacks and authentication
+     * @returns SSEStream instance
+     * 
+     * @example
+     * ```typescript
+     * const stream = eventsApi.streamEventsByContractSSE('CABC...', {
+     *   apiKey: 'your-api-key',
+     *   onMessage: (event) => {
+     *     const data = JSON.parse(event.data);
+     *     console.log('New event for contract:', data);
+     *   },
+     * });
+     * 
+     * stream.connect();
+     * ```
+     */
+    streamEventsByContractSSE(contractId: string, options?: SSEStreamOptions): SSEStream {
+        if (!contractId) {
+            throw new runtime.RequiredError(
+                'contractId',
+                'Required parameter "contractId" was null or undefined when calling streamEventsByContractSSE().'
+            );
+        }
+        const url = `${this.basePath}/v1/events/stream/multi?contract_ids=${encodeURIComponent(contractId)}`;
+        return new SSEStream(url, options);
+    }
+
+    /**
+     * Stream new events for multiple contracts in real time via Server-Sent Events with automatic reconnection.
+     * Returns an SSEStream instance that manages the connection lifecycle.
+     * 
+     * @param contractIds - Array of contract IDs to stream events for
+     * @param options - SSE stream options including callbacks and authentication
+     * @returns SSEStream instance
+     * 
+     * @example
+     * ```typescript
+     * const stream = eventsApi.streamMultiEventsSSE(['CABC...', 'CDEF...'], {
+     *   apiKey: 'your-api-key',
+     *   onMessage: (event) => {
+     *     const data = JSON.parse(event.data);
+     *     console.log('New event:', data);
+     *   },
+     * });
+     * 
+     * stream.connect();
+     * ```
+     */
+    streamMultiEventsSSE(contractIds: string[], options?: SSEStreamOptions): SSEStream {
+        if (!contractIds || contractIds.length === 0) {
+            throw new runtime.RequiredError(
+                'contractIds',
+                'Required parameter "contractIds" must be a non-empty array when calling streamMultiEventsSSE().'
+            );
+        }
+        const ids = contractIds.map(id => encodeURIComponent(id)).join(',');
+        const url = `${this.basePath}/v1/events/stream/multi?contract_ids=${ids}`;
+        return new SSEStream(url, options);
+    }

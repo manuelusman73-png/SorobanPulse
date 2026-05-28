@@ -4535,6 +4535,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "secrecy"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9bd1c54ea06cfd2f6b63219704de0b9b4f72dcc2b8fdef820be6cd799780e91e"
+dependencies = [
+ "serde",
+ "zeroize",
+]
+
+[[package]]
 name = "security-framework"
 version = "3.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4865,11 +4875,13 @@ dependencies = [
  "parquet",
  "rand 0.8.5",
  "reqwest 0.12.28",
+ "secrecy",
  "serde",
  "serde_json",
  "sha2 0.10.9",
  "sqlx",
  "stellar-xdr",
+ "subtle",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",

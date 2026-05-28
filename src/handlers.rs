@@ -616,6 +616,22 @@ pub async fn stream_events_multi(
 
     let ids: Vec<String> = raw.split(',').map(|s| s.trim().to_string()).collect();
 
+    // Validate number of contract IDs does not exceed limit
+    if ids.len() > state.config.sse_multi_max_contract_ids {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": format!("too many contract IDs (max {})", state.config.sse_multi_max_contract_ids),
+                "code": "VALIDATION_ERROR",
+                "limit": state.config.sse_multi_max_contract_ids,
+                "provided": ids.len(),
+            })),
+        ));
+    }
+
+    // Record histogram metric for contract IDs per connection
+    crate::metrics::record_sse_multi_contract_ids(ids.len() as u64);
+
     // Validate every ID; collect all invalid ones for a helpful error message.
     let invalid: Vec<String> = ids
         .iter()
@@ -2550,10 +2566,32 @@ pub async fn get_events_diff(
     State(state): State<AppState>,
     Query(params): Query<crate::models::DiffParams>,
 ) -> Result<Json<Value>, AppError> {
-    if params.from_ledger > params.to_ledger {
+    // Validate from_ledger and to_ledger are positive
+    if params.from_ledger < 0 {
         return Err(AppError::Validation(
-            "from_ledger must be <= to_ledger".to_string(),
+            "from_ledger must be a positive integer".to_string(),
         ));
+    }
+    if params.to_ledger < 0 {
+        return Err(AppError::Validation(
+            "to_ledger must be a positive integer".to_string(),
+        ));
+    }
+
+    // Validate from_ledger < to_ledger
+    if params.from_ledger >= params.to_ledger {
+        return Err(AppError::Validation(
+            "from_ledger must be less than to_ledger".to_string(),
+        ));
+    }
+
+    // Validate ledger range does not exceed maximum
+    let ledger_range = params.to_ledger - params.from_ledger;
+    if ledger_range > state.config.max_ledger_range as i64 {
+        return Err(AppError::Validation(format!(
+            "ledger range exceeds maximum of {}",
+            state.config.max_ledger_range
+        )));
     }
 
     // Single query: count per (contract_id, event_type) in range

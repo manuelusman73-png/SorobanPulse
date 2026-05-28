@@ -43,9 +43,13 @@ jobs:
       SOURCE_URL: postgres://postgres:postgres@localhost:5432/soroban_pulse_source
       RESTORE_URL: postgres://postgres:postgres@localhost:5433/soroban_pulse_restore
       BACKUP_DEST: /tmp/backups
+      BACKUP_ENCRYPTION_KEY: test-encryption-key-12345
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install GPG
+        run: sudo apt-get update && sudo apt-get install -y gnupg
 
       - name: Apply migrations to source DB
         run: |
@@ -67,9 +71,22 @@ jobs:
             FROM generate_series(1, 50) AS i;
           SQL
 
-      - name: Run backup
+      - name: Run encrypted backup
         run: |
-          DATABASE_URL="$SOURCE_URL" BACKUP_DEST="$BACKUP_DEST" bash scripts/backup.sh
+          DATABASE_URL="$SOURCE_URL" \
+          BACKUP_ENCRYPTION_KEY="$BACKUP_ENCRYPTION_KEY" \
+          BACKUP_DEST="$BACKUP_DEST" \
+          bash scripts/backup.sh
+
+      - name: Verify backup file is encrypted
+        run: |
+          BACKUP_FILE=$(ls "$BACKUP_DEST"/*.dump.gpg | head -1)
+          if [ ! -f "$BACKUP_FILE" ]; then
+            echo "ERROR: Encrypted backup file not found"
+            exit 1
+          fi
+          echo "Encrypted backup created: $BACKUP_FILE"
+          file "$BACKUP_FILE" | grep -q "GPG" && echo "✓ File is GPG encrypted"
 
       - name: Apply migrations to restore DB
         run: |
@@ -77,11 +94,12 @@ jobs:
             psql "$RESTORE_URL" -f "$f" || true
           done
 
-      - name: Restore backup to target DB
+      - name: Restore encrypted backup to target DB
         run: |
-          DUMP_FILE=$(ls "$BACKUP_DEST"/*.dump | head -1)
-          pg_restore --clean --if-exists --no-owner --no-privileges \
-            --dbname "$RESTORE_URL" "$DUMP_FILE"
+          BACKUP_FILE=$(ls "$BACKUP_DEST"/*.dump.gpg | head -1)
+          DATABASE_URL="$RESTORE_URL" \
+          BACKUP_ENCRYPTION_KEY="$BACKUP_ENCRYPTION_KEY" \
+          bash scripts/restore.sh "$BACKUP_FILE" <<< "yes"
 
       - name: Verify row counts match
         run: |
@@ -93,4 +111,4 @@ jobs:
             echo "ERROR: Row count mismatch — backup verification failed"
             exit 1
           fi
-          echo "Backup verification passed: $SOURCE_COUNT rows match"
+          echo "✓ Backup verification passed: $SOURCE_COUNT rows match"

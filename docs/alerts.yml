@@ -10,6 +10,7 @@ groups:
         annotations:
           summary: "Soroban Pulse indexer is falling behind"
           description: "Indexer lag is {{ $value }} ledgers (threshold: 100). The indexer may be experiencing RPC errors or database slowness. Check logs with: kubectl logs -l app=soroban-pulse | grep 'Indexer error'"
+          runbook_url: "https://github.com/Soroban-Pulse/SorobanPulse/blob/main/docs/runbooks/indexer-lag.md"
 
       - alert: IndexerLagCritical
         expr: soroban_pulse_indexer_lag_ledgers > 500
@@ -20,6 +21,7 @@ groups:
         annotations:
           summary: "Soroban Pulse indexer lag is critical"
           description: "Indexer lag is {{ $value }} ledgers (threshold: 500). Immediate investigation required. Check RPC endpoint health and database performance."
+          runbook_url: "https://github.com/Soroban-Pulse/SorobanPulse/blob/main/docs/runbooks/indexer-lag.md"
 
       - alert: IndexerStall
         expr: time() - soroban_pulse_indexer_last_poll_timestamp > 120
@@ -30,6 +32,7 @@ groups:
         annotations:
           summary: "Soroban Pulse indexer has stalled"
           description: "No successful indexer poll in {{ $value | humanizeDuration }}. The indexer may have lost the advisory lock or crashed. Check replica health and restart if necessary."
+          runbook_url: "https://github.com/Soroban-Pulse/SorobanPulse/blob/main/docs/runbooks/indexer-lag.md"
 
       - alert: HighRPCErrorRate
         expr: |
@@ -44,6 +47,7 @@ groups:
         annotations:
           summary: "Soroban Pulse RPC error rate is above 5%"
           description: "More than 5% of RPC calls are failing over the last 5 minutes (current rate: {{ $value | humanizePercentage }}). Check RPC endpoint connectivity and consider switching to a backup RPC node."
+          runbook_url: "https://github.com/Soroban-Pulse/SorobanPulse/blob/main/docs/runbooks/rpc-errors.md"
 
       - alert: DBPoolExhaustion
         expr: soroban_pulse_db_pool_size >= soroban_pulse_db_pool_max
@@ -54,6 +58,7 @@ groups:
         annotations:
           summary: "Soroban Pulse database connection pool is exhausted"
           description: "The database connection pool has been at maximum capacity for more than 1 minute (pool_size={{ $value }}). New requests may be queued or rejected. Consider increasing DB_MAX_CONNECTIONS or scaling the service."
+          runbook_url: "https://github.com/Soroban-Pulse/SorobanPulse/blob/main/docs/runbooks/db-pool-exhaustion.md"
 
       - alert: HighHTTPErrorRate
         expr: |
@@ -68,6 +73,7 @@ groups:
         annotations:
           summary: "Soroban Pulse HTTP 5xx error rate exceeds 1%"
           description: "More than 1% of HTTP requests are returning 5xx errors over the last 5 minutes (current rate: {{ $value | humanizePercentage }}). Check application logs for errors and database connectivity."
+          runbook_url: "https://github.com/Soroban-Pulse/SorobanPulse/blob/main/docs/runbooks/indexer-lag.md"
 
       - alert: P99LatencySLOBreach
         expr: histogram_quantile(0.99, rate(soroban_pulse_http_request_duration_seconds_bucket[5m])) > 0.2
@@ -78,6 +84,7 @@ groups:
         annotations:
           summary: "Soroban Pulse p99 latency exceeds 200ms SLO"
           description: "p99 request latency is {{ $value | humanizeDuration }} (SLO: 200ms). Consider scaling horizontally, adding database indexes, or investigating slow queries."
+          runbook_url: "https://github.com/Soroban-Pulse/SorobanPulse/blob/main/docs/runbooks/db-pool-exhaustion.md"
 
       - alert: IndexerRPCErrors
         expr: rate(soroban_pulse_rpc_errors_total[5m]) > 0.1
@@ -88,6 +95,7 @@ groups:
         annotations:
           summary: "Soroban Pulse RPC errors are elevated"
           description: "RPC error rate is {{ $value }} errors/sec. Check RPC endpoint connectivity and review logs for specific error messages."
+          runbook_url: "https://github.com/Soroban-Pulse/SorobanPulse/blob/main/docs/runbooks/rpc-errors.md"
 
       - alert: IndexerNoEventsIndexed
         expr: increase(soroban_pulse_events_indexed_total[10m]) == 0
@@ -98,6 +106,7 @@ groups:
         annotations:
           summary: "Soroban Pulse indexer is not indexing events"
           description: "No events indexed in the last 10 minutes. This may be expected during low-activity periods on the network, but could also indicate an indexer stall. Verify network activity and check indexer logs."
+          runbook_url: "https://github.com/Soroban-Pulse/SorobanPulse/blob/main/docs/runbooks/indexer-lag.md"
 
       - alert: HTTPRequestLatencyHigh
         expr: histogram_quantile(0.95, rate(soroban_pulse_http_request_duration_seconds_bucket[5m])) > 1
@@ -108,6 +117,7 @@ groups:
         annotations:
           summary: "Soroban Pulse HTTP p95 request latency is high"
           description: "p95 request latency is {{ $value | humanizeDuration }}. Consider scaling or investigating database performance."
+          runbook_url: "https://github.com/Soroban-Pulse/SorobanPulse/blob/main/docs/runbooks/db-pool-exhaustion.md"
 
       - alert: PodMemoryNearLimit
         expr: soroban_pulse_process_memory_bytes / (512 * 1024 * 1024) > 0.9
@@ -118,6 +128,7 @@ groups:
         annotations:
           summary: "Soroban Pulse pod memory is approaching the 512Mi limit"
           description: "Process memory is {{ $value | humanizeBytes }} ({{ $value | humanizePercentage }} of the 512Mi limit). OOM kill risk if usage continues to grow. Consider increasing the memory limit or investigating leaks."
+          runbook_url: "https://github.com/Soroban-Pulse/SorobanPulse/blob/main/docs/runbooks/sse-connections.md"
       - alert: UnusedIndexesDetected
         expr: soroban_pulse_unused_indexes_total > 0
         for: 24h
@@ -127,6 +138,7 @@ groups:
         annotations:
           summary: "Soroban Pulse has unused database indexes"
           description: "{{ $value }} index(es) have not been scanned since the last pg_stat_user_indexes reset. Unused indexes waste storage and slow writes. Review with: SELECT indexname, tablename FROM pg_stat_user_indexes WHERE schemaname = 'public' AND idx_scan = 0;"
+          runbook_url: "https://github.com/Soroban-Pulse/SorobanPulse/blob/main/docs/runbooks/db-pool-exhaustion.md"
 
       - alert: MatviewRefreshTimeout
         expr: increase(soroban_pulse_matview_refresh_timeout_total[1h]) > 0
@@ -137,3 +149,4 @@ groups:
         annotations:
           summary: "Materialized view refresh hit lock timeout"
           description: "A materialized view refresh was skipped due to a lock timeout in the last hour. Check for long-running queries blocking the view lock."
+          runbook_url: "https://github.com/Soroban-Pulse/SorobanPulse/blob/main/docs/runbooks/db-pool-exhaustion.md"

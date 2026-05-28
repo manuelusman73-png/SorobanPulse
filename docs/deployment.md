@@ -491,32 +491,75 @@ sudo systemctl reload caddy
 
 For stricter RPO, enable WAL archiving (see below).
 
-### pg_dump schedule (recommended for most deployments)
+### Backup Encryption
 
-Use `scripts/backup.sh` to create a compressed custom-format dump:
+All backups are encrypted using GPG symmetric encryption (AES-256) before being stored or uploaded. This protects sensitive event data at rest in S3 or local storage.
+
+#### Setting up encryption
+
+1. Generate a strong passphrase and store it securely (e.g., AWS Secrets Manager, HashiCorp Vault):
 
 ```bash
-# Dump to a local directory
-DATABASE_URL=postgres://user:pass@localhost/soroban_pulse ./scripts/backup.sh
-
-# Dump and upload to S3
-DATABASE_URL=postgres://... BACKUP_DEST=s3://my-bucket/soroban-pulse ./scripts/backup.sh
+# Generate a random 32-character passphrase
+openssl rand -base64 32
 ```
+
+2. Set the `BACKUP_ENCRYPTION_KEY` environment variable to this passphrase:
+
+```bash
+export BACKUP_ENCRYPTION_KEY="your-secure-passphrase-here"
+```
+
+3. Store the passphrase in your secrets manager and inject it at runtime:
+
+```bash
+# Example: AWS Secrets Manager
+export BACKUP_ENCRYPTION_KEY=$(aws secretsmanager get-secret-value \
+  --secret-id soroban-pulse/backup-key \
+  --query SecretString --output text)
+```
+
+### pg_dump schedule (recommended for most deployments)
+
+Use `scripts/backup.sh` to create an encrypted compressed custom-format dump:
+
+```bash
+# Dump to a local directory (encrypted)
+DATABASE_URL=postgres://user:pass@localhost/soroban_pulse \
+BACKUP_ENCRYPTION_KEY="your-passphrase" \
+./scripts/backup.sh
+
+# Dump and upload to S3 (encrypted)
+DATABASE_URL=postgres://... \
+BACKUP_ENCRYPTION_KEY="your-passphrase" \
+BACKUP_DEST=s3://my-bucket/soroban-pulse \
+./scripts/backup.sh
+```
+
+Backups are saved with a `.gpg` extension (e.g., `soroban_pulse_20260314T000000Z.dump.gpg`).
 
 Schedule with cron (hourly example):
 
 ```cron
-0 * * * * DATABASE_URL=postgres://... BACKUP_DEST=s3://my-bucket/backups /app/scripts/backup.sh >> /var/log/soroban-backup.log 2>&1
+0 * * * * \
+  DATABASE_URL=postgres://... \
+  BACKUP_ENCRYPTION_KEY=$(aws secretsmanager get-secret-value --secret-id soroban-pulse/backup-key --query SecretString --output text) \
+  BACKUP_DEST=s3://my-bucket/backups \
+  /app/scripts/backup.sh >> /var/log/soroban-backup.log 2>&1
 ```
 
 ### Restoring from a dump
 
 ```bash
-# From a local file
-DATABASE_URL=postgres://... ./scripts/restore.sh ./backups/soroban_pulse_20260314T000000Z.dump
+# From a local encrypted file
+DATABASE_URL=postgres://... \
+BACKUP_ENCRYPTION_KEY="your-passphrase" \
+./scripts/restore.sh ./backups/soroban_pulse_20260314T000000Z.dump.gpg
 
-# From S3
-DATABASE_URL=postgres://... ./scripts/restore.sh s3://my-bucket/backups/soroban_pulse_20260314T000000Z.dump
+# From S3 (encrypted)
+DATABASE_URL=postgres://... \
+BACKUP_ENCRYPTION_KEY="your-passphrase" \
+./scripts/restore.sh s3://my-bucket/backups/soroban_pulse_20260314T000000Z.dump.gpg
 ```
 
 The restore script prompts for confirmation before overwriting data.
@@ -527,8 +570,8 @@ A weekly GitHub Actions workflow (`.github/workflows/backup-verify.yml`) automat
 
 1. Provisions two PostgreSQL containers (source and restore target)
 2. Seeds the source database with test data
-3. Runs `scripts/backup.sh` to create a dump
-4. Restores the dump to the target database
+3. Runs `scripts/backup.sh` to create an encrypted dump
+4. Restores the encrypted dump to the target database
 5. Compares `COUNT(*) FROM events` between source and target — fails if they differ
 
 The workflow runs every Sunday at 02:00 UTC (`cron: '0 2 * * 0'`) and can also be triggered manually via `workflow_dispatch`.
