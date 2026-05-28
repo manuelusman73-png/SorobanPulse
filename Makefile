@@ -40,6 +40,9 @@ migrate: ## Run pending database migrations
 migrate-down: ## Rollback the most recent migration
 	cargo sqlx migrate revert
 
+check-migrations: ## Check for duplicate migration timestamps
+	@bash scripts/check-migrations.sh
+
 clean: ## Remove build artifacts
 	cargo clean
 	rm -f openapi.json

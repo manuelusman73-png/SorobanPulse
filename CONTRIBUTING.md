@@ -44,7 +44,48 @@ make run         # Start the development server
 make docker-up   # Start the full stack via Docker Compose
 make docker-down # Tear down the Docker Compose stack
 make migrate     # Run pending database migrations
+make check-migrations # Check for duplicate migration timestamps
 make clean       # Remove build artifacts
+```
+
+## Database Migrations
+
+### Naming Convention
+
+Migration files must follow the naming convention:
+
+```
+<YYYYMMDDHHMMSS>_<description>.sql
+```
+
+Where:
+- `YYYYMMDDHHMMSS` is a unique timestamp (14 digits)
+- `<description>` is a short, snake_case description of the migration
+
+**Important:** Each migration must have a **unique timestamp prefix**. SQLx applies migrations in lexicographic order by filename. Duplicate timestamps cause non-deterministic apply order and can lead to schema inconsistencies between fresh and incrementally-migrated databases.
+
+### Checking for Duplicates
+
+Before committing a new migration, run:
+
+```bash
+make check-migrations
+```
+
+This ensures no two migration files share the same timestamp prefix. The CI pipeline also runs this check automatically.
+
+### Example
+
+```
+20260527024126_add_composite_indexes.sql
+20260527024127_add_webhook_failures_table.sql
+```
+
+Not:
+
+```
+20260527000000_add_composite_indexes.sql
+20260527000000_add_webhook_failures_table.sql  # ❌ Duplicate timestamp!
 ```
 
 ## Fuzzing
