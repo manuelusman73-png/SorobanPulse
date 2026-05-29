@@ -222,6 +222,17 @@ pub fn update_sse_connections(count: usize) {
     m::gauge!("soroban_pulse_sse_active_connections").set(count as f64);
 }
 
+/// Update the active WebSocket connections count
+pub fn update_ws_connections(count: usize) {
+    m::gauge!("soroban_pulse_ws_active_connections").set(count as f64);
+}
+
+/// Record timeseries query duration
+pub fn record_timeseries_query_duration(duration: std::time::Duration) {
+    m::histogram!("soroban_pulse_timeseries_query_duration_seconds")
+        .record(duration.as_secs_f64());
+}
+
 /// Record SSE multi-stream contract IDs per connection (histogram)
 pub fn record_sse_multi_contract_ids(count: u64) {
     m::histogram!("soroban_pulse_sse_multi_contract_ids").record(count as f64);
