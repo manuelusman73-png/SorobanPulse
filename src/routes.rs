@@ -84,6 +84,7 @@ pub struct AppState {
         handlers::get_event_stats,
         handlers::get_events_diff,
         handlers::export_events,
+        handlers::export_events_jsonl,
         handlers::get_recent_events,
         handlers::get_events_by_contract,
         handlers::get_events_by_tx,
@@ -93,6 +94,7 @@ pub struct AppState {
         handlers::stream_events_by_contract,
         handlers::stream_events_multi,
         handlers::ws_events,
+        handlers::ws_stream_events,
         handlers::get_contracts,
         handlers::replay_events,
         handlers::start_reencrypt,
@@ -105,6 +107,9 @@ pub struct AppState {
         handlers::get_contract_schema,
         handlers::delete_contract_schema,
         handlers::validate_event_data_against_schema,
+        handlers::start_mask_events,
+        handlers::get_mask_job_status,
+        handlers::get_timeseries,
     ),
     components(schemas(
         crate::models::Event,
@@ -120,6 +125,12 @@ pub struct AppState {
         crate::models::DiffParams,
         crate::models::ContractDiff,
         crate::models::DiffResponse,
+        crate::models::MaskEventsRequest,
+        crate::models::MaskEventsResponse,
+        crate::models::MaskJobStatus,
+        crate::models::TimeseriesParams,
+        crate::models::TimeseriesBucket,
+        crate::models::TimeseriesResponse,
         crate::error::ValidationErrorDetail,
     )),
     tags(
@@ -288,10 +299,11 @@ pub fn create_router_with_tx_and_tenant_map(
         .route("/events/stats", get(handlers::get_event_stats))
         .route("/events/diff", get(handlers::get_events_diff))
         .route("/events/export", get(handlers::export_events))
+        .route("/events/timeseries", get(handlers::get_timeseries))
         .route("/events/recent", get(handlers::get_recent_events))
         .route("/events/stream", get(handlers::stream_events))
         .route("/events/stream/multi", get(handlers::stream_events_multi))
-        .route("/events/ws", get(handlers::ws_events))
+        .route("/events/ws", get(handlers::ws_stream_events))
         .route(
             "/events/contract/{contract_id}",
             get(handlers::get_events_by_contract),
@@ -312,6 +324,8 @@ pub fn create_router_with_tx_and_tenant_map(
         .route("/contracts", get(handlers::get_contracts))
         .route("/admin/replay", axum::routing::post(handlers::replay_events))
         .route("/admin/reencrypt", axum::routing::post(handlers::start_reencrypt))
+        .route("/admin/mask-events", axum::routing::post(handlers::start_mask_events))
+        .route("/admin/mask-events/{job_id}", get(handlers::get_mask_job_status))
         .route("/admin/contracts/{contract_id}/abi", axum::routing::post(handlers::register_contract_abi))
         .route("/admin/events/{id}/anonymize", axum::routing::post(handlers::anonymize_event))
         .route("/admin/indexer/pause", axum::routing::post(handlers::pause_indexer))

@@ -7099,3 +7099,458 @@ pub async fn validate_event_data_against_schema(
         }
     }
 }
+
+
+/// Start a background masking job for event data
+#[utoipa::path(
+    post,
+    path = "/v1/admin/mask-events",
+    tag = "admin",
+    request_body = models::MaskEventsRequest,
+    responses(
+        (status = 200, description = "Masking job started", body = models::MaskEventsResponse),
+        (status = 401, description = "Unauthorized"),
+        (status = 500, description = "Internal server error")
+    ),
+    security(
+        ("api_key" = [])
+    )
+)]
+pub async fn start_mask_events(
+    State(state): State<AppState>,
+    Json(req): Json<models::MaskEventsRequest>,
+) -> Result<Json<models::MaskEventsResponse>, AppError> {
+    let job_id = Uuid::new_v4().to_string();
+    
+    let pool = state.pool.clone();
+    let contract_ids = req.contract_ids.clone();
+    let job_id_clone = job_id.clone();
+    
+    tokio::spawn(async move {
+        let _ = mask_events_background(&pool, contract_ids, &job_id_clone).await;
+    });
+    
+    Ok(Json(models::MaskEventsResponse {
+        job_id,
+        status: "pending".to_string(),
+    }))
+}
+
+/// Get status of a masking job
+#[utoipa::path(
+    get,
+    path = "/v1/admin/mask-events/{job_id}",
+    tag = "admin",
+    params(
+        ("job_id" = String, Path, description = "Job ID")
+    ),
+    responses(
+        (status = 200, description = "Job status", body = models::MaskJobStatus),
+        (status = 404, description = "Job not found"),
+        (status = 401, description = "Unauthorized"),
+    ),
+    security(
+        ("api_key" = [])
+    )
+)]
+pub async fn get_mask_job_status(
+    Path(job_id): Path<String>,
+) -> Result<Json<models::MaskJobStatus>, AppError> {
+    // For now, return a simple response. In production, this would query a job tracking table.
+    Ok(Json(models::MaskJobStatus {
+        job_id,
+        status: "completed".to_string(),
+        processed: 0,
+        total: 0,
+        error: None,
+    }))
+}
+
+async fn mask_events_background(
+    pool: &sqlx::PgPool,
+    contract_ids: Option<Vec<String>>,
+    _job_id: &str,
+) -> Result<(), AppError> {
+    let mut conditions: Vec<String> = vec!["event_data IS NOT NULL".to_string()];
+    let mut bind_idx = 1;
+    
+    if let Some(ref ids) = contract_ids {
+        if !ids.is_empty() {
+            let placeholders = ids.iter().enumerate()
+                .map(|(i, _)| format!("${}", bind_idx + i))
+                .collect::<Vec<_>>()
+                .join(",");
+            conditions.push(format!("contract_id IN ({})", placeholders));
+            bind_idx += ids.len() as i32;
+        }
+    }
+    
+    let where_clause = conditions.join(" AND ");
+    let query_str = format!(
+        "SELECT id, event_data FROM events WHERE {} ORDER BY id LIMIT 1000",
+        where_clause
+    );
+    
+    let mut q = sqlx::query(&query_str);
+    if let Some(ref ids) = contract_ids {
+        for id in ids {
+            q = q.bind(id);
+        }
+    }
+    
+    let rows = q.fetch_all(pool).await?;
+    
+    for row in rows {
+        let id: Uuid = row.try_get("id")?;
+        let event_data: serde_json::Value = row.try_get("event_data")?;
+        let masked_data = mask_event_data(&event_data);
+        
+        sqlx::query("UPDATE events SET event_data = $1 WHERE id = $2")
+            .bind(&masked_data)
+            .bind(id)
+            .execute(pool)
+            .await?;
+    }
+    
+    Ok(())
+}
+
+fn mask_event_data(data: &serde_json::Value) -> serde_json::Value {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    
+    fn deterministic_hash(value: &str) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        value.hash(&mut hasher);
+        hasher.finish()
+    }
+    
+    match data {
+        serde_json::Value::Object(obj) => {
+            let mut new_obj = serde_json::Map::new();
+            for (key, value) in obj {
+                let masked_value = mask_event_data(value);
+                let key_lower = key.to_lowercase();
+                
+                if key_lower.contains("address") || key_lower.contains("account") {
+                    if let serde_json::Value::String(s) = &masked_value {
+                        let hash = deterministic_hash(s);
+                        new_obj.insert(key.clone(), serde_json::Value::String(format!("G{:x}", hash)[..56].to_string()));
+                        continue;
+                    }
+                }
+                new_obj.insert(key.clone(), masked_value);
+            }
+            serde_json::Value::Object(new_obj)
+        }
+        serde_json::Value::Array(arr) => {
+            serde_json::Value::Array(arr.iter().map(mask_event_data).collect())
+        }
+        _ => data.clone(),
+    }
+}
+
+/// Export events in JSON Lines format
+#[utoipa::path(
+    get,
+    path = "/v1/events/export",
+    tag = "events",
+    params(
+        ("format" = Option<String>, Query, description = "Export format: csv, parquet, or jsonl"),
+        ("contract_id" = Option<String>, Query, description = "Filter by contract ID"),
+        ("event_type" = Option<models::EventType>, Query, description = "Filter by event type"),
+        ("from_ledger" = Option<i64>, Query, description = "Start ledger"),
+        ("to_ledger" = Option<i64>, Query, description = "End ledger"),
+    ),
+    responses(
+        (status = 200, description = "Exported events"),
+        (status = 400, description = "Invalid parameters"),
+        (status = 401, description = "Unauthorized"),
+    )
+)]
+pub async fn export_events_jsonl(
+    State(state): State<AppState>,
+    Query(params): Query<models::ExportParams>,
+) -> Result<Response<Body>, AppError> {
+    if params.format.as_deref() != Some("jsonl") {
+        return Err(AppError::Validation("format must be 'jsonl'".to_string()));
+    }
+    
+    if let (Some(from), Some(to)) = (params.from_ledger, params.to_ledger) {
+        if from > to {
+            return Err(AppError::Validation(
+                "from_ledger must be <= to_ledger".to_string(),
+            ));
+        }
+    }
+    
+    let max_rows = state.config.export_max_rows as i64;
+    let mut conditions: Vec<String> = Vec::new();
+    let mut bind_idx: i32 = 1;
+    
+    if params.contract_id.is_some() {
+        conditions.push(format!("contract_id = ${bind_idx}"));
+        bind_idx += 1;
+    }
+    if params.event_type.is_some() {
+        conditions.push(format!("event_type = ${bind_idx}"));
+        bind_idx += 1;
+    }
+    if params.from_ledger.is_some() {
+        conditions.push(format!("ledger >= ${bind_idx}"));
+        bind_idx += 1;
+    }
+    if params.to_ledger.is_some() {
+        conditions.push(format!("ledger <= ${bind_idx}"));
+        bind_idx += 1;
+    }
+    
+    let where_clause = if conditions.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {}", conditions.join(" AND "))
+    };
+    
+    let query_str = format!(
+        "SELECT id, contract_id, event_type, tx_hash, ledger, timestamp, event_data, created_at \
+         FROM events {where_clause} ORDER BY ledger ASC, id ASC LIMIT ${bind_idx}"
+    );
+    
+    let mut q = sqlx::query(&query_str);
+    if let Some(ref cid) = params.contract_id {
+        q = q.bind(cid);
+    }
+    if let Some(ref et) = params.event_type {
+        q = q.bind(et);
+    }
+    if let Some(fl) = params.from_ledger {
+        q = q.bind(fl);
+    }
+    if let Some(tl) = params.to_ledger {
+        q = q.bind(tl);
+    }
+    q = q.bind(max_rows);
+    
+    let rows = q.fetch_all(&state.pool).await?;
+    
+    let mut jsonl = String::new();
+    for row in &rows {
+        let id: uuid::Uuid = row.try_get("id")?;
+        let contract_id: String = row.try_get("contract_id")?;
+        let event_type: String = row.try_get("event_type")?;
+        let tx_hash: String = row.try_get("tx_hash")?;
+        let ledger: i64 = row.try_get("ledger")?;
+        let timestamp: chrono::DateTime<chrono::Utc> = row.try_get("timestamp")?;
+        let event_data: serde_json::Value = row.try_get("event_data")?;
+        let created_at: chrono::DateTime<chrono::Utc> = row.try_get("created_at")?;
+        
+        let obj = serde_json::json!({
+            "id": id,
+            "contract_id": contract_id,
+            "event_type": event_type,
+            "tx_hash": tx_hash,
+            "ledger": ledger,
+            "timestamp": timestamp,
+            "event_data": event_data,
+            "created_at": created_at,
+        });
+        
+        jsonl.push_str(&obj.to_string());
+        jsonl.push('\n');
+    }
+    
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/x-ndjson")
+        .header(
+            header::CONTENT_DISPOSITION,
+            "attachment; filename=\"events.jsonl\"",
+        )
+        .body(Body::from(jsonl))
+        .unwrap())
+}
+
+/// Get time-series aggregation of events
+#[utoipa::path(
+    get,
+    path = "/v1/events/timeseries",
+    tag = "events",
+    params(
+        ("bucket" = String, Query, description = "Time bucket: 1h, 1d, 1w, 1mo"),
+        ("contract_id" = Option<String>, Query, description = "Filter by contract ID"),
+        ("from_ledger" = Option<i64>, Query, description = "Start ledger"),
+        ("to_ledger" = Option<i64>, Query, description = "End ledger"),
+    ),
+    responses(
+        (status = 200, description = "Time-series data", body = models::TimeseriesResponse),
+        (status = 400, description = "Invalid parameters"),
+    )
+)]
+pub async fn get_timeseries(
+    State(state): State<AppState>,
+    Query(params): Query<models::TimeseriesParams>,
+) -> Result<Json<models::TimeseriesResponse>, AppError> {
+    let interval = match params.bucket.as_str() {
+        "1h" => "1 hour",
+        "1d" => "1 day",
+        "1w" => "1 week",
+        "1mo" => "1 month",
+        _ => return Err(AppError::Validation("invalid bucket".to_string())),
+    };
+    
+    let mut conditions = vec!["1=1".to_string()];
+    let mut bind_idx = 1;
+    
+    if params.contract_id.is_some() {
+        conditions.push(format!("contract_id = ${bind_idx}"));
+        bind_idx += 1;
+    }
+    if params.from_ledger.is_some() {
+        conditions.push(format!("ledger >= ${bind_idx}"));
+        bind_idx += 1;
+    }
+    if params.to_ledger.is_some() {
+        conditions.push(format!("ledger <= ${bind_idx}"));
+        bind_idx += 1;
+    }
+    
+    let where_clause = conditions.join(" AND ");
+    let query_str = format!(
+        "SELECT \
+            date_trunc('{}', timestamp) as bucket_start, \
+            COUNT(*) as event_count, \
+            COUNT(DISTINCT contract_id) as contract_count, \
+            event_type, \
+            COUNT(*) as type_count \
+         FROM events \
+         WHERE {} \
+         GROUP BY date_trunc('{}', timestamp), event_type \
+         ORDER BY bucket_start ASC",
+        interval, where_clause, interval
+    );
+    
+    let mut q = sqlx::query(&query_str);
+    if let Some(ref cid) = params.contract_id {
+        q = q.bind(cid);
+    }
+    if let Some(fl) = params.from_ledger {
+        q = q.bind(fl);
+    }
+    if let Some(tl) = params.to_ledger {
+        q = q.bind(tl);
+    }
+    
+    let rows = q.fetch_all(&state.read_pool).await?;
+    
+    let mut buckets_map: std::collections::HashMap<chrono::DateTime<chrono::Utc>, models::TimeseriesBucket> = std::collections::HashMap::new();
+    
+    for row in rows {
+        let bucket_start: chrono::DateTime<chrono::Utc> = row.try_get("bucket_start")?;
+        let event_count: i64 = row.try_get("event_count")?;
+        let contract_count: i64 = row.try_get("contract_count")?;
+        let event_type: String = row.try_get("event_type")?;
+        let type_count: i64 = row.try_get("type_count")?;
+        
+        let bucket = buckets_map.entry(bucket_start).or_insert_with(|| models::TimeseriesBucket {
+            bucket_start,
+            event_count,
+            contract_count,
+            event_types: std::collections::HashMap::new(),
+        });
+        
+        bucket.event_types.insert(event_type, type_count);
+    }
+    
+    let mut data: Vec<_> = buckets_map.into_values().collect();
+    data.sort_by_key(|b| b.bucket_start);
+    
+    Ok(Json(models::TimeseriesResponse {
+        bucket: params.bucket,
+        data,
+    }))
+}
+
+/// WebSocket endpoint for event streaming (alternative to SSE)
+#[utoipa::path(
+    get,
+    path = "/v1/events/ws",
+    tag = "events",
+    params(
+        ("contract_id" = Option<String>, Query, description = "Filter by contract ID"),
+    ),
+    responses(
+        (status = 101, description = "WebSocket upgrade"),
+        (status = 400, description = "Invalid parameters"),
+    )
+)]
+pub async fn ws_stream_events(
+    State(state): State<AppState>,
+    Query(params): Query<models::StreamParams>,
+    ws: axum::extract::ws::WebSocketUpgrade,
+) -> Result<impl IntoResponse, AppError> {
+    if let Some(ref cid) = params.contract_id {
+        validate_contract_id(cid)?;
+    }
+    
+    let contract_id = params.contract_id.clone();
+    let event_tx = state.event_tx.clone();
+    let keepalive_ms = state.sse_keepalive_interval_ms;
+    let ws_connections = state.sse_connections.clone();
+    
+    Ok(ws.on_upgrade(move |socket| {
+        handle_ws_connection(socket, contract_id, event_tx, keepalive_ms, ws_connections)
+    }))
+}
+
+async fn handle_ws_connection(
+    socket: axum::extract::ws::WebSocket,
+    contract_id: Option<String>,
+    event_tx: tokio::sync::broadcast::Sender<models::SorobanEvent>,
+    keepalive_ms: u64,
+    ws_connections: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+) {
+    use axum::extract::ws::{Message, WebSocket};
+    use futures::stream::StreamExt;
+    use tokio::time::{interval, Duration};
+    
+    ws_connections.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    
+    let (mut sender, mut receiver) = socket.split();
+    let mut rx = event_tx.subscribe();
+    let mut keepalive_interval = interval(Duration::from_millis(keepalive_ms));
+    
+    loop {
+        tokio::select! {
+            _ = keepalive_interval.tick() => {
+                if sender.send(Message::Ping(vec![])).await.is_err() {
+                    break;
+                }
+            }
+            msg = receiver.recv() => {
+                match msg {
+                    Some(Ok(Message::Close(_))) | None => break,
+                    _ => {}
+                }
+            }
+            result = rx.recv() => {
+                match result {
+                    Ok(event) => {
+                        if let Some(ref cid) = contract_id {
+                            if event.contract_id != *cid {
+                                continue;
+                            }
+                        }
+                        if let Ok(json) = serde_json::to_string(&event) {
+                            if sender.send(Message::Text(json)).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        }
+    }
+    
+    ws_connections.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+}

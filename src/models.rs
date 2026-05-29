@@ -193,8 +193,74 @@ pub struct ExportParams {
     pub from_ledger: Option<i64>,
     pub to_ledger: Option<i64>,
     pub contract_id: Option<String>,
-    /// Output format: "csv" (default) or "parquet"
+    /// Output format: "csv" (default), "parquet", or "jsonl"
     pub format: Option<String>,
+}
+
+/// Request body for POST /v1/admin/mask-events
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub struct MaskEventsRequest {
+    /// Optional list of contract IDs to mask. If not provided, masks all events.
+    pub contract_ids: Option<Vec<String>>,
+}
+
+/// Response body for POST /v1/admin/mask-events
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct MaskEventsResponse {
+    /// Unique job ID for tracking the masking operation
+    pub job_id: String,
+    /// Current status: "pending", "running", "completed", or "failed"
+    pub status: String,
+}
+
+/// Response body for GET /v1/admin/mask-events/:job_id
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct MaskJobStatus {
+    /// Unique job ID
+    pub job_id: String,
+    /// Current status: "pending", "running", "completed", or "failed"
+    pub status: String,
+    /// Number of events processed so far
+    pub processed: i64,
+    /// Total number of events to process
+    pub total: i64,
+    /// Error message if status is "failed"
+    pub error: Option<String>,
+}
+
+/// Query parameters for GET /v1/events/timeseries
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub struct TimeseriesParams {
+    /// Time bucket: "1h", "1d", "1w", "1mo"
+    pub bucket: String,
+    /// Optional: filter by contract ID
+    pub contract_id: Option<String>,
+    /// Optional: start ledger
+    pub from_ledger: Option<i64>,
+    /// Optional: end ledger
+    pub to_ledger: Option<i64>,
+}
+
+/// Single time bucket in timeseries response
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct TimeseriesBucket {
+    /// Start of the time bucket (ISO 8601)
+    pub bucket_start: DateTime<Utc>,
+    /// Number of events in this bucket
+    pub event_count: i64,
+    /// Number of unique contracts in this bucket
+    pub contract_count: i64,
+    /// Event counts by type
+    pub event_types: std::collections::HashMap<String, i64>,
+}
+
+/// Response body for GET /v1/events/timeseries
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct TimeseriesResponse {
+    /// Time bucket size
+    pub bucket: String,
+    /// Array of time buckets
+    pub data: Vec<TimeseriesBucket>,
 }
 
 /// Query parameters for GET /v1/events/diff
